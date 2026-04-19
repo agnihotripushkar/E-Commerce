@@ -157,6 +157,7 @@ services:
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
       SPRING_ZIPKIN_BASE_URL: http://zipkin:9411
+      JWT_SECRET: bXlzdXBlcnNlY3JldEtleUZvckpXVEF1dGhlbnRpY2F0aW9uMTIz
     networks:
       - ecommerce-network
 
@@ -206,7 +207,10 @@ services:
       ORDER_SERVICE_URL: http://order-service:8083
       PAYMENT_SERVICE_URL: http://payment-service:8084
       NOTIFICATION_SERVICE_URL: http://notification-service:8085
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
       SPRING_ZIPKIN_BASE_URL: http://zipkin:9411
+      JWT_SECRET: bXlzdXBlcnNlY3JldEtleUZvckpXVEF1dGhlbnRpY2F0aW9uMTIz
     networks:
       - ecommerce-network
 

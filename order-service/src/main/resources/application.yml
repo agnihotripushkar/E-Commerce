@@ -48,6 +48,18 @@ kafka:
   topic:
     order-placed: order-placed
     payment-processed: payment-processed
+    order-cancelled: order-cancelled
+
+resilience4j:
+  retry:
+    instances:
+      productClient:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
 
 management:
   endpoints:

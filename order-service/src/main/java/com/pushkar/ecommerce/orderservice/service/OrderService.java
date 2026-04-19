@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pushkar.ecommerce.orderservice.client.ProductCatalogClient;
 import com.pushkar.ecommerce.orderservice.client.ProductSnapshot;
 import com.pushkar.ecommerce.orderservice.exception.ResourceNotFoundException;
+import com.pushkar.ecommerce.orderservice.kafka.OrderCancelledEvent;
 import com.pushkar.ecommerce.orderservice.kafka.OrderPlacedEvent;
 import com.pushkar.ecommerce.orderservice.kafka.PaymentProcessedEvent;
 import com.pushkar.ecommerce.orderservice.model.OrderStatus;
@@ -14,6 +15,7 @@ import com.pushkar.ecommerce.orderservice.model.dto.PlaceOrderRequest;
 import com.pushkar.ecommerce.orderservice.model.entity.Order;
 import com.pushkar.ecommerce.orderservice.model.entity.OrderLineItem;
 import com.pushkar.ecommerce.orderservice.repository.OrderRepository;
+import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,19 +43,23 @@ public class OrderService {
     @Value("${kafka.topic.order-placed:order-placed}")
     private String orderPlacedTopic;
 
+    @Value("${kafka.topic.order-cancelled:order-cancelled}")
+    private String orderCancelledTopic;
+
+    // ── Queries ──────────────────────────────────────────────────────────────────
+
     @Transactional(readOnly = true)
     public OrderResponse getOrder(UUID id) {
-        Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + id));
-        return toResponse(order);
+        return toResponse(findOrThrow(id));
     }
 
     @Transactional(readOnly = true)
     public List<OrderResponse> listOrdersForUser(UUID userId) {
-        return orderRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .map(this::toResponse)
-                .toList();
+        return orderRepository.findByUserIdOrderByCreatedAtDesc(userId)
+                .stream().map(this::toResponse).toList();
     }
+
+    // ── Commands ─────────────────────────────────────────────────────────────────
 
     @Transactional
     public OrderResponse placeOrder(PlaceOrderRequest request) {
@@ -69,8 +75,7 @@ public class OrderService {
                 throw new IllegalArgumentException("Insufficient stock for product: " + line.productId());
             }
             BigDecimal unit = product.price();
-            BigDecimal lineTotal = unit.multiply(BigDecimal.valueOf(line.quantity()));
-            total = total.add(lineTotal);
+            total = total.add(unit.multiply(BigDecimal.valueOf(line.quantity())));
 
             OrderLineItem item = new OrderLineItem();
             item.setProductId(line.productId());
@@ -89,26 +94,47 @@ public class OrderService {
         }
 
         Order saved = orderRepository.save(order);
-
-        OrderPlacedEvent event = new OrderPlacedEvent(
-                saved.getId(),
-                saved.getUserId(),
-                saved.getTotalAmount(),
-                saved.getLineItems().stream()
-                        .map(li -> new OrderPlacedEvent.OrderPlacedLine(
-                                li.getProductId(), li.getQuantity(), li.getUnitPrice()))
-                        .toList()
-        );
-        try {
-            kafkaTemplate.send(orderPlacedTopic, saved.getId().toString(), objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize order event", e);
-        }
-
+        publishOrderPlaced(saved);
         return toResponse(saved);
     }
 
-    private ProductSnapshot fetchProduct(Long productId) {
+    @Transactional
+    public OrderResponse cancelOrder(UUID id) {
+        Order order = findOrThrow(id);
+        if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.CANCELLED) {
+            throw new IllegalStateException(
+                    "Cannot cancel order in status: " + order.getStatus());
+        }
+        order.setStatus(OrderStatus.CANCELLED);
+        Order saved = orderRepository.save(order);
+        publishOrderCancelled(saved);
+        return toResponse(saved);
+    }
+
+    // ── Kafka consumer ────────────────────────────────────────────────────────────
+
+    @KafkaListener(
+            topics = "${kafka.topic.payment-processed:payment-processed}",
+            groupId = "${spring.kafka.consumer.group-id}")
+    @Transactional
+    public void onPaymentProcessed(String payload) {
+        try {
+            PaymentProcessedEvent event = objectMapper.readValue(payload, PaymentProcessedEvent.class);
+            orderRepository.findById(event.orderId()).ifPresentOrElse(order -> {
+                order.setStatus("SUCCESS".equalsIgnoreCase(event.status())
+                        ? OrderStatus.PAID : OrderStatus.PAYMENT_FAILED);
+                orderRepository.save(order);
+                log.info("Order {} status updated to {} after payment", order.getId(), order.getStatus());
+            }, () -> log.warn("Payment event for unknown order: {}", event.orderId()));
+        } catch (JsonProcessingException e) {
+            log.error("Invalid payment-processed payload: {}", payload, e);
+        }
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────────
+
+    @Retry(name = "productClient", fallbackMethod = "fetchProductFallback")
+    ProductSnapshot fetchProduct(Long productId) {
         try {
             return productCatalogClient.getProduct(productId);
         } catch (RestClientResponseException e) {
@@ -119,38 +145,45 @@ public class OrderService {
         }
     }
 
-    @KafkaListener(
-            topics = "${kafka.topic.payment-processed:payment-processed}",
-            groupId = "${spring.kafka.consumer.group-id}")
-    @Transactional
-    public void onPaymentProcessed(String payload) {
+    ProductSnapshot fetchProductFallback(Long productId, Exception ex) {
+        log.error("Product service unavailable for id={} after retries: {}", productId, ex.getMessage());
+        throw new IllegalStateException("Product service temporarily unavailable", ex);
+    }
+
+    private void publishOrderPlaced(Order order) {
+        OrderPlacedEvent event = new OrderPlacedEvent(
+                order.getId(), order.getUserId(), order.getTotalAmount(),
+                order.getLineItems().stream()
+                        .map(li -> new OrderPlacedEvent.OrderPlacedLine(
+                                li.getProductId(), li.getQuantity(), li.getUnitPrice()))
+                        .toList());
+        publish(orderPlacedTopic, order.getId().toString(), event);
+    }
+
+    private void publishOrderCancelled(Order order) {
+        OrderCancelledEvent event = new OrderCancelledEvent(
+                order.getId(), order.getUserId(), "User requested cancellation");
+        publish(orderCancelledTopic, order.getId().toString(), event);
+    }
+
+    private void publish(String topic, String key, Object event) {
         try {
-            PaymentProcessedEvent event = objectMapper.readValue(payload, PaymentProcessedEvent.class);
-            orderRepository.findById(event.orderId()).ifPresentOrElse(order -> {
-                if ("SUCCESS".equalsIgnoreCase(event.status())) {
-                    order.setStatus(OrderStatus.PAID);
-                } else {
-                    order.setStatus(OrderStatus.PAYMENT_FAILED);
-                }
-                orderRepository.save(order);
-            }, () -> log.warn("Payment event for unknown order: {}", event.orderId()));
+            kafkaTemplate.send(topic, key, objectMapper.writeValueAsString(event));
         } catch (JsonProcessingException e) {
-            log.error("Invalid payment-processed payload: {}", payload, e);
+            log.error("Failed to serialize event for topic={}", topic, e);
         }
+    }
+
+    private Order findOrThrow(UUID id) {
+        return orderRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + id));
     }
 
     private OrderResponse toResponse(Order order) {
         List<OrderLineResponse> lines = order.getLineItems().stream()
                 .map(li -> new OrderLineResponse(li.getProductId(), li.getQuantity(), li.getUnitPrice()))
                 .toList();
-        return new OrderResponse(
-                order.getId(),
-                order.getUserId(),
-                order.getStatus(),
-                order.getTotalAmount(),
-                lines,
-                order.getCreatedAt(),
-                order.getUpdatedAt()
-        );
+        return new OrderResponse(order.getId(), order.getUserId(), order.getStatus(),
+                order.getTotalAmount(), lines, order.getCreatedAt(), order.getUpdatedAt());
     }
 }

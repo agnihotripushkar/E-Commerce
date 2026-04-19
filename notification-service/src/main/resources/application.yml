@@ -40,6 +40,8 @@ kafka:
   topic:
     order-placed: order-placed
     payment-processed: payment-processed
+    order-shipped: order-shipped
+    order-cancelled: order-cancelled
 
 management:
   endpoints:
