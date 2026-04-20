@@ -89,6 +89,13 @@
             <artifactId>zipkin-reporter-brave</artifactId>
         </dependency>
 
+        <!-- Netty native macOS DNS resolver (required on Apple Silicon) -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver-dns-native-macos</artifactId>
+            <classifier>osx-aarch_64</classifier>
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
