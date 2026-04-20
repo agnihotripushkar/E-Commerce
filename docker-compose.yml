@@ -157,6 +157,7 @@ services:
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
       SPRING_ZIPKIN_BASE_URL: http://zipkin:9411
+      TRACING_SAMPLING_PROBABILITY: 1.0
       JWT_SECRET: bXlzdXBlcnNlY3JldEtleUZvckpXVEF1dGhlbnRpY2F0aW9uMTIz
     networks:
       - ecommerce-network
@@ -179,6 +180,7 @@ services:
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
       SPRING_ZIPKIN_BASE_URL: http://zipkin:9411
+      TRACING_SAMPLING_PROBABILITY: 1.0
     networks:
       - ecommerce-network
 
@@ -210,6 +212,7 @@ services:
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
       SPRING_ZIPKIN_BASE_URL: http://zipkin:9411
+      TRACING_SAMPLING_PROBABILITY: 1.0
       JWT_SECRET: bXlzdXBlcnNlY3JldEtleUZvckpXVEF1dGhlbnRpY2F0aW9uMTIz
     networks:
       - ecommerce-network
@@ -236,6 +239,7 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       PRODUCT_SERVICE_URL: http://product-service:8082
       SPRING_ZIPKIN_BASE_URL: http://zipkin:9411
+      TRACING_SAMPLING_PROBABILITY: 1.0
     networks:
       - ecommerce-network
 
@@ -258,6 +262,7 @@ services:
       SPRING_DATASOURCE_PASSWORD: postgres
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_ZIPKIN_BASE_URL: http://zipkin:9411
+      TRACING_SAMPLING_PROBABILITY: 1.0
     networks:
       - ecommerce-network
 
@@ -280,6 +285,7 @@ services:
       SPRING_DATASOURCE_PASSWORD: postgres
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_ZIPKIN_BASE_URL: http://zipkin:9411
+      TRACING_SAMPLING_PROBABILITY: 1.0
     networks:
       - ecommerce-network
 
